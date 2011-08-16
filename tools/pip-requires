@@ -1,3 +1,4 @@
 httplib2
-glance
 nose
+unittest2
+paramiko==1.7.6

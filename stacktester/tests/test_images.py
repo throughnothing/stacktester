@@ -1,130 +1,93 @@
+import json
+import os
+
+import unittest2 as unittest
 
 from stacktester import openstack
-
-import json
-import unittest
-
-
-FIXTURES = [
-    {
-        'name': 'Image1',
-        'disk_format': 'vdi',
-        'container_format': 'ovf',
-        'is_public': False,
-        'properties': {
-            'key1': 'value1',
-        }
-    },
-    {
-        'name': 'Image2',
-        'disk_format': 'vdi',
-        'container_format': 'ovf',
-        'is_public': True,
-        'properties': {
-            'key2': 'value2',
-            'key3': 'value3',
-        }
-    },
-]
 
 
 class ImagesTest(unittest.TestCase):
 
     def setUp(self):
         self.os = openstack.Manager()
-        self.images = {}
-        for FIXTURE in FIXTURES:
-            meta = self.os.glance_client.add_image(FIXTURE, None)
-            self.images[str(meta['id'])] = meta
+
+        host = self.os.config.nova.host
+        port = self.os.config.nova.port
+        self.base_url = '%s:%s' % (host, port)
+        self.api_url = os.path.join(self.base_url, self.os.config.nova.base_url)
 
     def tearDown(self):
-        for (image_id, meta) in self.images.items():
-            self.os.glance_client.delete_image(image_id)
+        pass
 
-    def _assert_image_basic(self, image, expected):
-        self.assertEqual(expected['id'], image['id'])
-        self.assertEqual(expected['name'], image['name'])
+    def _assert_image_links(self, image):
+        image_id = str(image['id'])
 
-        #TODO: check links
+        self_link = 'http://' + os.path.join(self.api_url, 'images', image_id)
+        bookmark_link = 'http://' + os.path.join(self.base_url, 'images', image_id)
 
-    def _assert_image_metadata(self, image, expected):
-        expected_meta = expected['properties']
-        self.assertTrue('metadata' in image)
-        image_meta = image['metadata']
-        self.assertEqual(len(expected_meta), len(image_meta))
-        for (key, value) in expected_meta.items():
-            self.assertTrue(key in image_meta)
-            self.assertEqual(expected_meta[key], image_meta[key])
+        expected_links = [
+            {
+                'rel': 'self',
+                'href': self_link,
+            },
+            {
+                'rel': 'bookmark',
+                'href': bookmark_link,
+            },
+        ]
 
-    def _assert_image_detailed(self, image, expected):
-        self._assert_image_basic(image, expected)
+        self.assertEqual(image['links'], expected_links)
 
-        self.assertEqual(expected['name'], image['name'])
-        self.assertEqual('QUEUED', image['status'])
+    def _assert_image_entity_basic(self, image):
+        actual_keys = set(image.keys())
+        expected_keys = set((
+            'id',
+            'name',
+            'links',
+        ))
+        self.assertEqual(actual_keys, expected_keys)
 
-        #TODO: make this more robust
-        created_at = expected['created_at'].split('.')[0]+'Z'
-        self.assertEqual(created_at, image['created'])
-        self.assertEqual(expected['updated_at'], image['updated'])
+        self._assert_image_links(image)
 
-        self._assert_image_metadata(image, expected)
+    def _assert_image_entity_detailed(self, image):
+        keys = image.keys()
+        if 'server' in keys:
+            keys.remove('server')
+        actual_keys = set(keys)
+        expected_keys = set((
+            'id',
+            'name',
+            'progress',
+            'created',
+            'updated',
+            'status',
+            'metadata',
+            'links',
+        ))
+        self.assertEqual(actual_keys, expected_keys)
 
-    def test_get_images(self):
-        """Verify the correct list of image entities is returned"""
-        response, body = self.os.nova_api.request('GET', '/images')
+        self._assert_image_links(image)
+
+    def test_index(self):
+        """List all images"""
+
+        response, body = self.os.nova.request('GET', '/images')
 
         self.assertEqual(response['status'], '200')
-        result = json.loads(body)['images']
+        resp_body = json.loads(body)
+        self.assertEqual(resp_body.keys(), ['images'])
 
-        # expect to only see public images
-        self.assertEqual(len(result), 1)
+        for image in resp_body['images']:
+            self._assert_image_entity_basic(image)
 
-        for image in result:
-            expected = self.images[str(image['id'])]
-            self._assert_image_basic(image, expected)
+    def test_detail(self):
+        """List all images in detail"""
 
-    def test_get_images_detailed(self):
-        """Verify the correct list of detailed image entities is returned"""
-        response, body = self.os.nova_api.request('GET', '/images/detail')
+        response, body = self.os.nova.request('GET', '/images/detail')
 
         self.assertEqual(response['status'], '200')
-        result = json.loads(body)['images']
+        resp_body = json.loads(body)
+        self.assertEqual(resp_body.keys(), ['images'])
 
-        # expect to only see public images
-        self.assertEqual(len(result), 1)
-
-        for image in result:
-            expected = self.images[str(image['id'])]
-            self._assert_image_detailed(image, expected)
-
-    def test_get_image(self):
-        """Verify the correct entities are returned for each image"""
-        for (image_id, expected) in self.images.items():
-            url = '/images/%s' % (image_id,)
-            response, body = self.os.nova_api.request('GET', url)
-
-            self.assertEqual(response['status'], '200')
-            result = json.loads(body)['image']
-            self._assert_image_detailed(result, expected)
-
-    def test_get_image_metadata(self):
-        """Verify correct list of metadata entities are returned per image"""
-        for (image_id, expected) in self.images.items():
-            url = '/images/%s/meta' % (image_id,)
-            response, body = self.os.nova_api.request('GET', url)
-
-            self.assertEqual(response['status'], '200')
-            result = json.loads(body)
-            self._assert_image_metadata(result, expected)
-
-    def test_get_image_metadata_item(self):
-        """Verify the correct metadata entities are returned for each image"""
-        for (image_id, expected) in self.images.items():
-            for (meta_key, meta_value) in expected['properties'].items():
-                url = '/images/%s/meta/%s' % (image_id, meta_key)
-                response, body = self.os.nova_api.request('GET', url)
-
-                self.assertEqual(response['status'], '200')
-                result = json.loads(body)
-                self.assertEqual(result, {'meta': {meta_key: meta_value}})
-
+        for image in resp_body['images']:
+            self._assert_image_entity_detailed(image)

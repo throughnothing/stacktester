@@ -1,26 +1,86 @@
 #!/usr/bin/env python
-
 import optparse
+import os
 import sys
 
 import nose
 
-import stacktester
+import stacktester.config
+import stacktester.issues
 
 
 def main():
-    options = parse_options_or_die()
-    stacktester.CONFIG = stacktester.config.load_config(options.config)
-    nose.main(module="stacktester", defaultTest="stacktester.tests")
+
+    # redirect stderr to stdout
+    sys.stderr = sys.stdout
+
+    options, args = parse_options()
+    stacktester.config.StackConfig._path = os.path.abspath(options.config)
+    nose_argv = [sys.argv[0]]
+
+    if options.verbose:
+        nose_argv.append("-v")
+
+    if options.xunit:
+        nose_argv.append("--with-xunit")
+
+    if options.xunit_file:
+        nose_argv.append("--xunit-file=" + options.xunit_file)
+
+    nose_argv.extend(args)
+    status = run_nose_without_exiting(module="stacktester",
+                                      argv=nose_argv,
+                                      defaultTest="stacktester.tests")
+
+    report_known_issues_in_tests(stacktester.tests)
+    return status
 
 
-def parse_options_or_die():
+def parse_options():
     parser = optparse.OptionParser()
-    parser.add_option("-c", "--config", dest="config", metavar="FILE",
+    parser.add_option("-c", 
+                      "--config", 
+                      dest="config", 
+                      metavar="FILE",
                       help="Load configuration from FILE.",
                       default="etc/stacktester.cfg")
-    options, args = parser.parse_args()
-    return options
+    parser.add_option("-v",
+                      "--verbose",
+                      dest="verbose",
+                      action="store_true",
+                      help="Toggle verbose output.")
+    parser.add_option("--with-xunit",
+                      dest="xunit",
+                      action="store_true",
+                      help="Toggle xunit output.")
+    parser.add_option("--xunit-file",
+                      dest="xunit_file",
+                      metavar="XUNIT_OUTPUT_FILE",
+                      help="Load configuration from XUNIT_OUTPUT_FILE.",
+                      default="nosetests.xml")
+    return parser.parse_args()
+
+
+def run_nose_without_exiting(*args, **kwargs):
+    try:
+        nose.main(*args, **kwargs)
+    except SystemExit, e:
+        return e.code
+
+
+def report_known_issues_in_tests(module):
+    finder = stacktester.issues.KnownIssuesFinder()
+    finder.find_known_issues(module)
+    report_known_issues(finder.count)
+
+
+def report_known_issues(known_issues):
+    if known_issues == 0:
+        print "There were no known issues skipped."
+    elif known_issues == 1:
+        print "There was 1 known issue skipped."
+    else:
+        print "There were %d known issues skipped." % known_issues
 
 
 if __name__ == "__main__":

@@ -1,80 +1,100 @@
+import json
+import os
 
+import unittest2 as unittest
 
 from stacktester import openstack
-
-import json
-import unittest
-
-FIXTURES = [
-    {"flavorid": 1, "name": "m1.tiny", "ram": 512, "vcpus": 1, "disk": 0},
-    {"flavorid": 2, "name": "m1.small", "ram": 2048, "vcpus": 1, "disk": 20},
-    {"flavorid": 3, "name": "m1.medium", "ram": 4096, "vcpus": 2, "disk": 40},
-    {"flavorid": 4, "name": "m1.large", "ram": 8192, "vcpus": 4, "disk": 80},
-    {"flavorid": 5, "name": "m1.xlarge", "ram": 16384, "vcpus": 8, "disk": 160},
-] 
 
 
 class FlavorsTest(unittest.TestCase):
 
     def setUp(self):
         self.os = openstack.Manager()
-        self.flavors = {}
-        for FIXTURE in FIXTURES:
-            self.flavors[FIXTURE["name"]] = FIXTURE
-            self.os.nova_api._add_flavor(FIXTURE)
 
     def tearDown(self):
-       for FIXTURE in FIXTURES:
-           self.os.nova_api._delete_flavor(FIXTURE["name"])
+        pass
 
-    def test_get_flavor_details(self):
-        """
-        Verify the expected details are returned for a flavor
-        """
-        self.assertEqual(len(self.flavors.items()), len(FIXTURES))
-        for (flavor_name, expected) in self.flavors.items():
-            url = '/flavors/%s' % (expected['flavorid'])
-            response, body = self.os.nova_api.request('GET', url)
-            self.assertEqual(response['status'], '200')
-            actual = json.loads(body)['flavor']
-            self.assertEqual(expected['name'], actual['name'])
-            self.assertEqual(expected['ram'], actual['ram'])
-            self.assertEqual(expected['disk'], actual['disk'])
-
-    def test_get_flavors(self):
-        """
-        Verify the expected flavors are returned
-        """
-
+    def _index_flavors(self):
         url = '/flavors'
-        response, body = self.os.nova_api.request('GET', url)
+        response, body = self.os.nova.request('GET', url)
         self.assertEqual(response['status'], '200')
-        actuals = json.loads(body)['flavors']
+        body_dict = json.loads(body)
+        self.assertEqual(body_dict.keys(), ['flavors'])
+        return body_dict['flavors']
 
-        for actual in actuals:
-            print actual
-            
-            expected= self.flavors[actual['name']]
+    def _show_flavor(self, flavor_id):
+        url = '/flavors/%s' % flavor_id
+        response, body = self.os.nova.request('GET', url)
+        self.assertEqual(response['status'], '200')
+        body_dict = json.loads(body)
+        self.assertEqual(body_dict.keys(), ['flavor'])
+        return body_dict['flavor']
 
-            self.assertEqual(response['status'], '200')
-            self.assertEqual(expected['name'], actual['name'])
+    def _assert_flavor_entity_basic(self, flavor):
+        actual_keys = set(flavor.keys())
+        expected_keys = set(('id', 'name', 'links'))
+        self.assertEqual(actual_keys, expected_keys)
+        self._assert_flavor_links(flavor)
 
-    def test_get_flavors_detail(self):
-        """
-        Verify the expected flavors are returned
-        """
+    def _assert_flavor_entity_detailed(self, flavor):
+        actual_keys = set(flavor.keys())
+        expected_keys = set(('id', 'name', 'ram', 'disk', 'links'))
+        self.assertEqual(actual_keys, expected_keys)
+        self.assertEqual(type(flavor['ram']), int)
+        self.assertEqual(type(flavor['disk']), int)
+        self._assert_flavor_links(flavor)
+
+    def _assert_flavor_links(self, flavor):
+        actual_links = flavor['links']
+
+        flavor_id = str(flavor['id'])
+        host = self.os.config.nova.host
+        port = self.os.config.nova.port
+        api_url = '%s:%s' % (host, port)
+        base_url = os.path.join(api_url, self.os.config.nova.base_url)
+
+        self_link = 'http://' + os.path.join(base_url, 'flavors', flavor_id)
+        bookmark_link = 'http://' + os.path.join(api_url, 'flavors', flavor_id)
+
+        expected_links = [
+            {
+                'rel': 'self',
+                'href': self_link,
+            },
+            {
+                'rel': 'bookmark',
+                'href': bookmark_link,
+            },
+        ]
+
+        self.assertEqual(actual_links, expected_links)
+
+    def test_show_flavor(self):
+        """Retrieve a single flavor"""
+
+        flavors = self._index_flavors()
+
+        for flavor in flavors:
+            detailed_flavor = self._show_flavor(flavor['id'])
+            self._assert_flavor_entity_detailed(detailed_flavor)
+
+    def test_index_flavors_basic(self):
+        """List all flavors"""
+
+        flavors = self._index_flavors()
+
+        for flavor in flavors:
+            self._assert_flavor_entity_basic(flavor)
+
+    def test_index_flavors_detailed(self):
+        """List all flavors in detail"""
 
         url = '/flavors/detail'
-        response, body = self.os.nova_api.request('GET', url)
+        response, body = self.os.nova.request('GET', url)
         self.assertEqual(response['status'], '200')
-        actuals = json.loads(body)['flavors']
+        body_dict = json.loads(body)
+        self.assertEqual(body_dict.keys(), ['flavors'])
+        flavors = body_dict['flavors']
 
-        for actual in actuals:
-            print actual
-            
-            expected= self.flavors[actual['name']]
-
-            self.assertEqual(response['status'], '200')
-            self.assertEqual(expected['name'], actual['name'])
-            self.assertEqual(expected['disk'], actual['disk'])
-            self.assertEqual(expected['ram'], actual['ram'])
+        for flavor in flavors:
+            self._assert_flavor_entity_detailed(flavor)
